@@ -12,6 +12,8 @@ type Config struct {
 	NatsURL      string
 	TemporalAddr string
 	HTTPAddr     string
+	ProfilesPath string
+	WebDir       string
 	TaskQueues   []string
 }
 
@@ -22,6 +24,8 @@ func Load() Config {
 		NatsURL:      envOr("ORCH_NATS_URL", "nats://localhost:4222"),
 		TemporalAddr: envOr("ORCH_TEMPORAL_ADDR", "localhost:7233"),
 		HTTPAddr:     envOr("ORCH_HTTP_ADDR", ":8090"),
+		ProfilesPath: envOr("ORCH_PROFILES_PATH", "configs/profiles.json"),
+		WebDir:       envOr("ORCH_WEB_DIR", "web"),
 		TaskQueues:   splitCSV(envOr("ORCH_TASK_QUEUES", "lighting-workers,motion-workers,pi-workers")),
 	}
 }

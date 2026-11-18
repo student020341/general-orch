@@ -7,6 +7,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"orch/internal/aspects"
 	"orch/internal/bus"
 	"orch/internal/config"
 	"orch/internal/reconciler"
@@ -35,8 +36,13 @@ func main() {
 	}
 	defer natsBus.Close()
 
-	rec := reconciler.New(reconciler.DefaultCatalog())
+	rec := reconciler.New(reconciler.NewCatalog(nil))
+	aspects.RegisterAll(rec)
 	mgr := statemanager.New(st, rec, natsBus, logger)
+	if err := mgr.SyncCatalog(ctx, cfg.ProfilesPath); err != nil {
+		logger.Error("sync catalog failed", "err", err)
+		os.Exit(1)
+	}
 
 	logger.Info("state-manager running")
 	if err := mgr.Run(ctx, natsBus); err != nil {

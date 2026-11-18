@@ -7,6 +7,7 @@ import (
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/testsuite"
 
+	"orch/internal/aspects"
 	"orch/internal/driver"
 	"orch/internal/driver/mock"
 	"orch/internal/events"
@@ -53,7 +54,9 @@ func TestOrchestrationWorkflowEndToEndAndDrift(t *testing.T) {
 				"rotation": 270,
 			},
 		}
-		plan, err := reconciler.New(reconciler.DefaultCatalog()).Reconcile(entity)
+		rec := reconciler.New(reconciler.DefaultCatalog())
+		aspects.RegisterAll(rec)
+		plan, err := rec.Reconcile(entity)
 		if err != nil {
 			t.Fatalf("reconcile: %v", err)
 		}
@@ -112,7 +115,9 @@ func TestOrchestrationWorkflowEndToEndAndDrift(t *testing.T) {
 			Current: model.State{"rotation": float64(0)},
 			Target:  model.State{"rotation": 90},
 		}
-		plan, err := reconciler.New(reconciler.DefaultCatalog()).Reconcile(entity)
+		rec := reconciler.New(reconciler.DefaultCatalog())
+		aspects.RegisterAll(rec)
+		plan, err := rec.Reconcile(entity)
 		if err != nil {
 			t.Fatalf("reconcile: %v", err)
 		}

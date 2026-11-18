@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>orch — State Convergence Monitor</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo">orch</span>
+      <span id="health-pill" class="pill pill-muted">connecting…</span>
+    </div>
+    <div class="nav-links">
+      <label class="toggle">
+        <input type="checkbox" id="auto-refresh" checked />
+        Auto-refresh (1.5s)
+      </label>
+      <button id="refresh-btn" class="btn btn-secondary">Refresh</button>
+      <a href="http://localhost:8080" target="_blank" rel="noreferrer">Temporal UI ↗</a>
+      <a href="http://localhost:31311" target="_blank" rel="noreferrer">NATS UI ↗</a>
+    </div>
+  </header>
+
+  <main class="grid">
+    <!-- Left Column: Entities + Plans -->
+    <section class="card span-2">
+      <div class="card-header">
+        <h2>Entities</h2>
+        <span id="entity-count" class="muted">0 entities</span>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Kind / Vendor</th>
+              <th>Status</th>
+              <th>Ver</th>
+              <th>Visual</th>
+              <th>Current vs Target</th>
+            </tr>
+          </thead>
+          <tbody id="entities-body"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Submit Intent -->
+    <section class="card">
+      <div class="card-header">
+        <h2>Submit Intent</h2>
+        <div class="btn-group">
+          <button type="button" id="preset-lamp" class="btn btn-xs">Preset: 1-Light</button>
+          <button type="button" id="preset-beacon" class="btn btn-xs">Preset: Beacon</button>
+          <button type="button" id="preset-turn" class="btn btn-xs">Preset: Turn Only</button>
+        </div>
+      </div>
+      <form id="intent-form" class="stack">
+        <div class="row">
+          <label>
+            Entity ID
+            <input id="intent-id" type="text" placeholder="bot-1" required />
+          </label>
+          <label>
+            Kind
+            <select id="intent-kind"></select>
+          </label>
+        </div>
+        <div class="row">
+          <label>
+            Vendor
+            <input id="intent-vendor" type="text" value="mock" />
+          </label>
+          <label>
+            Task Queue (optional)
+            <input id="intent-queue" type="text" placeholder="default from profile" />
+          </label>
+        </div>
+        <label>
+          Patch / Target (JSON)
+          <textarea id="intent-patch" rows="6" spellcheck="false">{
+  "light1": { "r": 0, "g": 180, "b": 255 },
+  "light2": { "r": 255, "g": 60, "b": 120 },
+  "rotation": 90
+}</textarea>
+        </label>
+        <label class="toggle">
+          <input type="checkbox" id="intent-replace" />
+          Replace entire target (instead of merging patch)
+        </label>
+        <div class="actions">
+          <button type="submit" class="btn btn-primary">Send Intent</button>
+          <span id="intent-msg" class="muted"></span>
+        </div>
+      </form>
+    </section>
+
+    <!-- Selected Entity Plans & Dev Mock Hardware -->
+    <section class="card">
+      <div class="card-header">
+        <h2 id="plans-title">Execution Plans</h2>
+        <span class="muted">Click an entity row to inspect</span>
+      </div>
+      <div id="mock-box" class="mock-box hidden">
+        <div class="mock-header">
+          <strong>Simulated Hardware (cmd/dev)</strong>
+          <code id="mock-state">{}</code>
+        </div>
+        <form id="mock-drift-form" class="mock-form">
+          <input id="mock-drift-input" type="text" value='{"rotation": 45}' spellcheck="false" />
+          <button type="submit" class="btn btn-xs">Inject Hardware Drift</button>
+        </form>
+      </div>
+      <div id="plans-list" class="plans-list">
+        <p class="muted">Select an entity to inspect its DAG plans and steps.</p>
+      </div>
+    </section>
+
+    <!-- Device Catalog -->
+    <section class="card span-2">
+      <div class="card-header">
+        <h2>Device Profile Catalog</h2>
+        <div class="btn-group">
+          <button id="reload-catalog-btn" class="btn btn-secondary">Reload from configs/profiles.json</button>
+          <span id="catalog-msg" class="muted"></span>
+        </div>
+      </div>
+
+      <div class="catalog-grid">
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Kind</th>
+                <th>Aspects</th>
+                <th>Live State</th>
+                <th>Serial</th>
+                <th>Default Queues</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="catalog-body"></tbody>
+          </table>
+        </div>
+
+        <form id="catalog-form" class="stack">
+          <div class="row">
+            <label>
+              Kind
+              <input id="profile-kind" type="text" placeholder="lamp_custom" required />
+            </label>
+            <label>
+              Fetch State Queue
+              <input id="profile-fetch-queue" type="text" placeholder="motion-workers" />
+            </label>
+          </div>
+          <label>
+            Profile JSON Body
+            <textarea id="profile-json" rows="7" spellcheck="false">{
+  "aspects": ["lights"],
+  "default_queues": { "lights": "lighting-workers" },
+  "fetch_state_queue": "",
+  "supports_live_state": false,
+  "serial_execution": false
+}</textarea>
+          </label>
+          <div class="actions">
+            <button type="submit" class="btn btn-primary">Save Profile (Upsert)</button>
+            <span id="profile-msg" class="muted"></span>
+          </div>
+        </form>
+      </div>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>

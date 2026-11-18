@@ -1,0 +1,24 @@
+[
+  {
+    "kind": "beacon_bot",
+    "aspects": ["lights", "rotation"],
+    "default_queues": {
+      "lights": "lighting-workers",
+      "rotation": "motion-workers"
+    },
+    "fetch_state_queue": "motion-workers",
+    "supports_live_state": true,
+    "serial_execution": false
+  },
+  {
+    "kind": "beacon_bot_serial",
+    "aspects": ["lights", "rotation"],
+    "default_queues": {
+      "lights": "pi-workers",
+      "rotation": "pi-workers"
+    },
+    "fetch_state_queue": "pi-workers",
+    "supports_live_state": true,
+    "serial_execution": true
+  }
+]

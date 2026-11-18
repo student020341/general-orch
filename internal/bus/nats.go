@@ -19,6 +19,11 @@ type Publisher interface {
 	PublishJSON(ctx context.Context, subject string, payload any) error
 }
 
+// Broadcaster publishes fan-out control notifications across all active subscribers.
+type Broadcaster interface {
+	PublishBroadcast(subject string, payload any) error
+}
+
 // Bus manages a NATS connection and JetStream stream/consumers.
 type Bus struct {
 	nc     *nats.Conn
@@ -121,6 +126,39 @@ func (b *Bus) Consume(
 		return fmt.Errorf("consume %s: %w", consumerName, err)
 	}
 	defer cc.Stop()
+
+	<-ctx.Done()
+	if errors.Is(ctx.Err(), context.Canceled) {
+		return nil
+	}
+	return ctx.Err()
+}
+
+// PublishBroadcast sends a core NATS pub/sub message so every active subscriber instance receives it.
+func (b *Bus) PublishBroadcast(subject string, payload any) error {
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("marshal broadcast %s: %w", subject, err)
+	}
+	if err := b.nc.Publish(subject, data); err != nil {
+		return fmt.Errorf("publish broadcast %s: %w", subject, err)
+	}
+	return b.nc.Flush()
+}
+
+// SubscribeBroadcast listens on a core NATS subject (fan-out to all instances) until ctx is cancelled.
+func (b *Bus) SubscribeBroadcast(ctx context.Context, subject string, handler func(context.Context, []byte) error) error {
+	sub, err := b.nc.Subscribe(subject, func(msg *nats.Msg) {
+		hCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		defer cancel()
+		if err := handler(hCtx, msg.Data); err != nil {
+			b.logger.Error("broadcast handler failed", "subject", subject, "err", err)
+		}
+	})
+	if err != nil {
+		return fmt.Errorf("subscribe broadcast %s: %w", subject, err)
+	}
+	defer func() { _ = sub.Unsubscribe() }()
 
 	<-ctx.Done()
 	if errors.Is(ctx.Err(), context.Canceled) {

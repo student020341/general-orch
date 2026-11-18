@@ -1,30 +1,24 @@
 package reconciler
 
 import (
+	"context"
 	"fmt"
+	"slices"
+	"sync"
 
 	"orch/internal/model"
+	"orch/internal/store"
 )
 
-// DeviceProfile describes the capabilities, default worker queues, and hardware
-// constraints for a supported entity kind.
-type DeviceProfile struct {
-	Kind              string
-	Aspects           []string
-	DefaultQueues     map[string]string // aspect -> Temporal task queue
-	FetchStateQueue   string
-	SupportsLiveState bool
-	SerialExecution   bool // true chains mutation steps sequentially (e.g. power-limited board)
-}
-
-// ProfileCatalog holds known device profiles keyed by entity.Kind.
+// ProfileCatalog is a thread-safe, hot-reloadable registry of DeviceProfiles keyed by Kind.
 type ProfileCatalog struct {
-	profiles map[string]DeviceProfile
+	mu       sync.RWMutex
+	profiles map[string]model.DeviceProfile
 }
 
-// DefaultCatalog returns the built-in device profiles.
-func DefaultCatalog() *ProfileCatalog {
-	return NewCatalog([]DeviceProfile{
+// DefaultProfiles returns built-in profiles used as a fallback seed when no file/store entries exist.
+func DefaultProfiles() []model.DeviceProfile {
+	return []model.DeviceProfile{
 		{
 			Kind:    "beacon_bot",
 			Aspects: []string{"lights", "rotation"},
@@ -47,28 +41,74 @@ func DefaultCatalog() *ProfileCatalog {
 			SupportsLiveState: true,
 			SerialExecution:   true,
 		},
-	})
+	}
+}
+
+// DefaultCatalog builds a ProfileCatalog populated with DefaultProfiles.
+func DefaultCatalog() *ProfileCatalog {
+	return NewCatalog(DefaultProfiles())
 }
 
 // NewCatalog builds a ProfileCatalog from a slice of DeviceProfile definitions.
-func NewCatalog(defs []DeviceProfile) *ProfileCatalog {
-	m := make(map[string]DeviceProfile, len(defs))
+func NewCatalog(defs []model.DeviceProfile) *ProfileCatalog {
+	c := &ProfileCatalog{profiles: make(map[string]model.DeviceProfile, len(defs))}
+	c.Replace(defs)
+	return c
+}
+
+// Replace atomically swaps the catalog's profiles.
+func (c *ProfileCatalog) Replace(defs []model.DeviceProfile) {
+	next := make(map[string]model.DeviceProfile, len(defs))
 	for _, d := range defs {
-		m[d.Kind] = d
+		next[d.Kind] = d
 	}
-	return &ProfileCatalog{profiles: m}
+	c.mu.Lock()
+	c.profiles = next
+	c.mu.Unlock()
+}
+
+// LoadFromStore refreshes the catalog from a CatalogStore.
+func (c *ProfileCatalog) LoadFromStore(ctx context.Context, cs store.CatalogStore) error {
+	defs, err := cs.ListProfiles(ctx)
+	if err != nil {
+		return err
+	}
+	c.Replace(defs)
+	return nil
+}
+
+// List returns a sorted snapshot of all loaded profiles.
+func (c *ProfileCatalog) List() []model.DeviceProfile {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	out := make([]model.DeviceProfile, 0, len(c.profiles))
+	for _, p := range c.profiles {
+		out = append(out, p)
+	}
+	slices.SortFunc(out, func(a, b model.DeviceProfile) int {
+		if a.Kind < b.Kind {
+			return -1
+		}
+		if a.Kind > b.Kind {
+			return 1
+		}
+		return 0
+	})
+	return out
 }
 
 // Lookup returns the DeviceProfile for a given entity kind.
-func (c *ProfileCatalog) Lookup(kind string) (DeviceProfile, error) {
+func (c *ProfileCatalog) Lookup(kind string) (model.DeviceProfile, error) {
+	c.mu.RLock()
 	p, ok := c.profiles[kind]
+	c.mu.RUnlock()
 	if !ok {
-		return DeviceProfile{}, fmt.Errorf("unsupported entity kind %q", kind)
+		return model.DeviceProfile{}, fmt.Errorf("unsupported entity kind %q", kind)
 	}
 	return p, nil
 }
 
-func resolveTaskQueue(entity *model.Entity, profile DeviceProfile, aspect string) string {
+func resolveTaskQueue(entity *model.Entity, profile model.DeviceProfile, aspect string) string {
 	if entity.TaskQueue != "" {
 		return entity.TaskQueue
 	}

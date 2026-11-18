@@ -2,7 +2,10 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"os"
 
 	"orch/internal/model"
 )
@@ -19,6 +22,7 @@ type IntentPatchInput struct {
 	Vendor    string
 	TaskQueue string
 	Patch     model.State
+	Replace   bool
 }
 
 // EntityStore persists and updates entity current/target configuration state.
@@ -38,9 +42,48 @@ type PlanStore interface {
 	UpdatePlanStep(ctx context.Context, planID, stepID string, status model.StepStatus, errMsg string) error
 }
 
-// Store combines entity and plan persistence.
+// CatalogStore persists device profiles for dynamic catalog updates and reloads.
+type CatalogStore interface {
+	ListProfiles(ctx context.Context) ([]model.DeviceProfile, error)
+	GetProfile(ctx context.Context, kind string) (*model.DeviceProfile, error)
+	UpsertProfile(ctx context.Context, profile model.DeviceProfile) (*model.DeviceProfile, error)
+	DeleteProfile(ctx context.Context, kind string) error
+}
+
+// Store combines entity, plan, and profile catalog persistence.
 type Store interface {
 	EntityStore
 	PlanStore
+	CatalogStore
 	Close()
+}
+
+// LoadProfilesFile parses a JSON array of DeviceProfile entries from disk.
+func LoadProfilesFile(path string) ([]model.DeviceProfile, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read profiles file %s: %w", path, err)
+	}
+	var profiles []model.DeviceProfile
+	if err := json.Unmarshal(raw, &profiles); err != nil {
+		return nil, fmt.Errorf("parse profiles file %s: %w", path, err)
+	}
+	return profiles, nil
+}
+
+// SyncProfilesFromFile loads profiles from path and upserts them into cs.
+func SyncProfilesFromFile(ctx context.Context, cs CatalogStore, path string) (int, error) {
+	profiles, err := LoadProfilesFile(path)
+	if err != nil {
+		return 0, err
+	}
+	for _, p := range profiles {
+		if p.Kind == "" {
+			return 0, fmt.Errorf("profile in %s missing kind", path)
+		}
+		if _, err := cs.UpsertProfile(ctx, p); err != nil {
+			return 0, fmt.Errorf("upsert profile %q: %w", p.Kind, err)
+		}
+	}
+	return len(profiles), nil
 }

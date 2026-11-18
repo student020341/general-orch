@@ -36,9 +36,40 @@ func New(st store.Store, rec *reconciler.Reconciler, pub bus.Publisher, logger *
 	}
 }
 
-// Run starts durable NATS JetStream consumers for intents, step updates, and completion events.
+// SyncCatalog ensures device_profiles in the store are initialized (seeding from
+// profilesPath if empty) and loads them into the reconciler's ProfileCatalog.
+func (m *Manager) SyncCatalog(ctx context.Context, profilesPath string) error {
+	existing, err := m.store.ListProfiles(ctx)
+	if err != nil {
+		return fmt.Errorf("list profiles: %w", err)
+	}
+	if len(existing) == 0 {
+		if profilesPath != "" {
+			if n, err := store.SyncProfilesFromFile(ctx, m.store, profilesPath); err == nil {
+				m.logger.Info("seeded device catalog from file", "path", profilesPath, "count", n)
+			} else {
+				m.logger.Warn("seed from profiles file failed, using defaults", "path", profilesPath, "err", err)
+				for _, p := range reconciler.DefaultProfiles() {
+					if _, uerr := m.store.UpsertProfile(ctx, p); uerr != nil {
+						return uerr
+					}
+				}
+			}
+		} else {
+			for _, p := range reconciler.DefaultProfiles() {
+				if _, uerr := m.store.UpsertProfile(ctx, p); uerr != nil {
+					return uerr
+				}
+			}
+		}
+	}
+	return m.reconciler.Catalog().LoadFromStore(ctx, m.store)
+}
+
+// Run starts durable NATS JetStream consumers for intents, step updates, completion events,
+// and a broadcast subscriber for live catalog reloads.
 func (m *Manager) Run(ctx context.Context, b *bus.Bus) error {
-	errCh := make(chan error, 3)
+	errCh := make(chan error, 4)
 
 	go func() {
 		errCh <- b.Consume(ctx, "state-manager-intents", events.SubjectIntentPrefix+".>", m.handleIntentMsg)
@@ -49,6 +80,9 @@ func (m *Manager) Run(ctx context.Context, b *bus.Bus) error {
 	go func() {
 		errCh <- b.Consume(ctx, "state-manager-finished", events.SubjectFinishedPrefix+".>", m.handleFinishedMsg)
 	}()
+	go func() {
+		errCh <- b.SubscribeBroadcast(ctx, events.SubjectCatalogReloaded, m.handleCatalogReloadMsg)
+	}()
 
 	select {
 	case <-ctx.Done():
@@ -56,6 +90,14 @@ func (m *Manager) Run(ctx context.Context, b *bus.Bus) error {
 	case err := <-errCh:
 		return err
 	}
+}
+
+func (m *Manager) handleCatalogReloadMsg(ctx context.Context, _ []byte) error {
+	if err := m.reconciler.Catalog().LoadFromStore(ctx, m.store); err != nil {
+		return fmt.Errorf("reload catalog from store: %w", err)
+	}
+	m.logger.Info("reloaded device catalog", "profiles", len(m.reconciler.Catalog().List()))
+	return nil
 }
 
 func (m *Manager) handleIntentMsg(ctx context.Context, data []byte) error {
@@ -90,6 +132,7 @@ func (m *Manager) HandleIntentRequested(ctx context.Context, ev events.IntentReq
 		Vendor:    ev.Vendor,
 		TaskQueue: ev.TaskQueue,
 		Patch:     ev.Patch,
+		Replace:   ev.Replace,
 	})
 	if err != nil {
 		return fmt.Errorf("apply intent patch: %w", err)

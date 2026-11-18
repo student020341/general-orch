@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"os"
 	"time"
 
 	"orch/internal/bus"
@@ -12,11 +13,14 @@ import (
 	"orch/internal/store"
 )
 
-// Server exposes the HTTP API for submitting configuration intents and inspecting state/plans.
+// Server exposes the HTTP API for submitting configuration intents, inspecting state/plans,
+// and managing/reloading the device profile catalog.
 type Server struct {
-	store store.Store
-	pub   bus.Publisher
-	mux   *http.ServeMux
+	store        store.Store
+	pub          bus.Publisher
+	bcast        bus.Broadcaster
+	profilesPath string
+	mux          *http.ServeMux
 }
 
 // IntentRequest is the HTTP body for submitting a full or partial target config.
@@ -25,14 +29,18 @@ type IntentRequest struct {
 	Vendor    string      `json:"vendor"`
 	TaskQueue string      `json:"task_queue,omitempty"`
 	Patch     model.State `json:"patch"`
+	Replace   bool        `json:"replace,omitempty"`
 }
 
 // New constructs a gateway Server and registers routes.
-func New(st store.Store, pub bus.Publisher) *Server {
+// If webDir is non-empty and exists, static UI files are served under /ui/ (with / redirecting to /ui/).
+func New(st store.Store, pub bus.Publisher, bcast bus.Broadcaster, profilesPath string, webDir ...string) *Server {
 	s := &Server{
-		store: st,
-		pub:   pub,
-		mux:   http.NewServeMux(),
+		store:        st,
+		pub:          pub,
+		bcast:        bcast,
+		profilesPath: profilesPath,
+		mux:          http.NewServeMux(),
 	}
 	s.mux.HandleFunc("GET /healthz", s.handleHealth)
 	s.mux.HandleFunc("GET /entities", s.handleListEntities)
@@ -40,6 +48,22 @@ func New(st store.Store, pub bus.Publisher) *Server {
 	s.mux.HandleFunc("GET /entities/{id}/plans", s.handleListPlans)
 	s.mux.HandleFunc("PUT /entities/{id}/intent", s.handlePutIntent)
 	s.mux.HandleFunc("POST /entities/{id}/intent", s.handlePutIntent)
+
+	s.mux.HandleFunc("GET /catalog/profiles", s.handleListProfiles)
+	s.mux.HandleFunc("GET /catalog/profiles/{kind}", s.handleGetProfile)
+	s.mux.HandleFunc("PUT /catalog/profiles/{kind}", s.handlePutProfile)
+	s.mux.HandleFunc("DELETE /catalog/profiles/{kind}", s.handleDeleteProfile)
+	s.mux.HandleFunc("POST /catalog/reload", s.handleReloadCatalog)
+
+	if len(webDir) > 0 && webDir[0] != "" {
+		if info, err := os.Stat(webDir[0]); err == nil && info.IsDir() {
+			fs := http.StripPrefix("/ui/", http.FileServer(http.Dir(webDir[0])))
+			s.mux.Handle("GET /ui/", fs)
+			s.mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
+				http.Redirect(w, r, "/ui/", http.StatusFound)
+			})
+		}
+	}
 	return s
 }
 
@@ -130,6 +154,7 @@ func (s *Server) handlePutIntent(w http.ResponseWriter, r *http.Request) {
 		Vendor:      req.Vendor,
 		TaskQueue:   req.TaskQueue,
 		Patch:       req.Patch,
+		Replace:     req.Replace,
 		RequestedAt: time.Now().UTC(),
 	}
 	if err := s.pub.PublishJSON(r.Context(), events.IntentSubject(req.Kind, req.Vendor, id), ev); err != nil {
@@ -142,6 +167,106 @@ func (s *Server) handlePutIntent(w http.ResponseWriter, r *http.Request) {
 		"entity_id": id,
 		"kind":      req.Kind,
 		"vendor":    req.Vendor,
+	})
+}
+
+func (s *Server) handleListProfiles(w http.ResponseWriter, r *http.Request) {
+	profiles, err := s.store.ListProfiles(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, profiles)
+}
+
+func (s *Server) handleGetProfile(w http.ResponseWriter, r *http.Request) {
+	kind := r.PathValue("kind")
+	p, err := s.store.GetProfile(r.Context(), kind)
+	if errors.Is(err, store.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "profile not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, p)
+}
+
+func (s *Server) handlePutProfile(w http.ResponseWriter, r *http.Request) {
+	kind := r.PathValue("kind")
+	if kind == "" {
+		writeError(w, http.StatusBadRequest, "missing kind")
+		return
+	}
+	var p model.DeviceProfile
+	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json body: "+err.Error())
+		return
+	}
+	p.Kind = kind
+	if len(p.Aspects) == 0 {
+		writeError(w, http.StatusBadRequest, "aspects must not be empty")
+		return
+	}
+	saved, err := s.store.UpsertProfile(r.Context(), p)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if err := s.notifyCatalogReload("api"); err != nil {
+		writeError(w, http.StatusInternalServerError, "broadcast catalog reload: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, saved)
+}
+
+func (s *Server) handleDeleteProfile(w http.ResponseWriter, r *http.Request) {
+	kind := r.PathValue("kind")
+	err := s.store.DeleteProfile(r.Context(), kind)
+	if errors.Is(err, store.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "profile not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if err := s.notifyCatalogReload("api"); err != nil {
+		writeError(w, http.StatusInternalServerError, "broadcast catalog reload: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"deleted": true, "kind": kind})
+}
+
+func (s *Server) handleReloadCatalog(w http.ResponseWriter, r *http.Request) {
+	if s.profilesPath == "" {
+		writeError(w, http.StatusBadRequest, "profiles path is not configured")
+		return
+	}
+	count, err := store.SyncProfilesFromFile(r.Context(), s.store, s.profilesPath)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if err := s.notifyCatalogReload("file"); err != nil {
+		writeError(w, http.StatusInternalServerError, "broadcast catalog reload: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"reloaded": true,
+		"source":   s.profilesPath,
+		"count":    count,
+	})
+}
+
+func (s *Server) notifyCatalogReload(source string) error {
+	if s.bcast == nil {
+		return nil
+	}
+	return s.bcast.PublishBroadcast(events.SubjectCatalogReloaded, events.CatalogReloadedEvent{
+		Source:     source,
+		ReloadedAt: time.Now().UTC(),
 	})
 }
 

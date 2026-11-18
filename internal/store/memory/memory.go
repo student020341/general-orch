@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"maps"
 	"slices"
 	"sync"
 	"time"
@@ -15,6 +16,7 @@ type Store struct {
 	mu       sync.Mutex
 	entities map[string]*model.Entity
 	plans    map[string]*model.Plan
+	profiles map[string]model.DeviceProfile
 }
 
 // New creates an empty in-memory Store.
@@ -22,6 +24,7 @@ func New() *Store {
 	return &Store{
 		entities: make(map[string]*model.Entity),
 		plans:    make(map[string]*model.Plan),
+		profiles: make(map[string]model.DeviceProfile),
 	}
 }
 
@@ -83,7 +86,11 @@ func (s *Store) ApplyIntentPatch(_ context.Context, in store.IntentPatchInput) (
 	if in.TaskQueue != "" {
 		e.TaskQueue = in.TaskQueue
 	}
-	e.Target = model.MergeState(e.Target, in.Patch)
+	if in.Replace {
+		e.Target = model.MergeState(model.State{}, in.Patch)
+	} else {
+		e.Target = model.MergeState(e.Target, in.Patch)
+	}
 	e.Version++
 	e.Status = model.StatusPlanning
 	e.LastError = ""
@@ -179,6 +186,66 @@ func (s *Store) UpdatePlanStep(_ context.Context, planID, stepID string, status 
 		}
 	}
 	return store.ErrNotFound
+}
+
+func (s *Store) ListProfiles(_ context.Context) ([]model.DeviceProfile, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]model.DeviceProfile, 0, len(s.profiles))
+	for _, p := range s.profiles {
+		out = append(out, cloneProfile(p))
+	}
+	slices.SortFunc(out, func(a, b model.DeviceProfile) int {
+		if a.Kind < b.Kind {
+			return -1
+		}
+		if a.Kind > b.Kind {
+			return 1
+		}
+		return 0
+	})
+	return out, nil
+}
+
+func (s *Store) GetProfile(_ context.Context, kind string) (*model.DeviceProfile, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p, ok := s.profiles[kind]
+	if !ok {
+		return nil, store.ErrNotFound
+	}
+	cp := cloneProfile(p)
+	return &cp, nil
+}
+
+func (s *Store) UpsertProfile(_ context.Context, profile model.DeviceProfile) (*model.DeviceProfile, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cp := cloneProfile(profile)
+	cp.UpdatedAt = time.Now().UTC()
+	s.profiles[cp.Kind] = cp
+	ret := cloneProfile(cp)
+	return &ret, nil
+}
+
+func (s *Store) DeleteProfile(_ context.Context, kind string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.profiles[kind]; !ok {
+		return store.ErrNotFound
+	}
+	delete(s.profiles, kind)
+	return nil
+}
+
+func cloneProfile(p model.DeviceProfile) model.DeviceProfile {
+	cp := p
+	cp.Aspects = slices.Clone(p.Aspects)
+	cp.DefaultQueues = maps.Clone(p.DefaultQueues)
+	if cp.DefaultQueues == nil {
+		cp.DefaultQueues = map[string]string{}
+	}
+	return cp
 }
 
 func cloneEntity(e *model.Entity) *model.Entity {

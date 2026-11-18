@@ -53,6 +53,16 @@ CREATE TABLE IF NOT EXISTS plan_steps (
 	error TEXT NOT NULL DEFAULT '',
 	PRIMARY KEY (plan_id, step_id)
 );
+
+CREATE TABLE IF NOT EXISTS device_profiles (
+	kind TEXT PRIMARY KEY,
+	aspects JSONB NOT NULL DEFAULT '[]'::jsonb,
+	default_queues JSONB NOT NULL DEFAULT '{}'::jsonb,
+	fetch_state_queue TEXT NOT NULL DEFAULT '',
+	supports_live_state BOOLEAN NOT NULL DEFAULT false,
+	serial_execution BOOLEAN NOT NULL DEFAULT false,
+	updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
 `
 
 // Store implements store.Store backed by PostgreSQL.
@@ -167,7 +177,11 @@ func (s *Store) ApplyIntentPatch(ctx context.Context, in store.IntentPatchInput)
 		if in.TaskQueue != "" {
 			e.TaskQueue = in.TaskQueue
 		}
-		e.Target = model.MergeState(e.Target, in.Patch)
+		if in.Replace {
+			e.Target = model.MergeState(model.State{}, in.Patch)
+		} else {
+			e.Target = model.MergeState(e.Target, in.Patch)
+		}
 		e.Version++
 		e.Status = model.StatusPlanning
 		e.LastError = ""
@@ -452,4 +466,110 @@ func scanEntity(row pgx.Row) (*model.Entity, error) {
 		e.Target = model.State{}
 	}
 	return &e, nil
+}
+
+func (s *Store) ListProfiles(ctx context.Context) ([]model.DeviceProfile, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT kind, aspects, default_queues, fetch_state_queue, supports_live_state, serial_execution, updated_at
+		FROM device_profiles
+		ORDER BY kind ASC
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []model.DeviceProfile
+	for rows.Next() {
+		p, err := scanProfile(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *p)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) GetProfile(ctx context.Context, kind string) (*model.DeviceProfile, error) {
+	row := s.pool.QueryRow(ctx, `
+		SELECT kind, aspects, default_queues, fetch_state_queue, supports_live_state, serial_execution, updated_at
+		FROM device_profiles
+		WHERE kind = $1
+	`, kind)
+	return scanProfile(row)
+}
+
+func (s *Store) UpsertProfile(ctx context.Context, profile model.DeviceProfile) (*model.DeviceProfile, error) {
+	if profile.Aspects == nil {
+		profile.Aspects = []string{}
+	}
+	if profile.DefaultQueues == nil {
+		profile.DefaultQueues = map[string]string{}
+	}
+	aspectsJSON, err := json.Marshal(profile.Aspects)
+	if err != nil {
+		return nil, err
+	}
+	queuesJSON, err := json.Marshal(profile.DefaultQueues)
+	if err != nil {
+		return nil, err
+	}
+	now := time.Now().UTC()
+	profile.UpdatedAt = now
+
+	_, err = s.pool.Exec(ctx, `
+		INSERT INTO device_profiles (kind, aspects, default_queues, fetch_state_queue, supports_live_state, serial_execution, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		ON CONFLICT (kind) DO UPDATE SET
+			aspects = EXCLUDED.aspects,
+			default_queues = EXCLUDED.default_queues,
+			fetch_state_queue = EXCLUDED.fetch_state_queue,
+			supports_live_state = EXCLUDED.supports_live_state,
+			serial_execution = EXCLUDED.serial_execution,
+			updated_at = EXCLUDED.updated_at
+	`, profile.Kind, aspectsJSON, queuesJSON, profile.FetchStateQueue, profile.SupportsLiveState, profile.SerialExecution, now)
+	if err != nil {
+		return nil, err
+	}
+	return &profile, nil
+}
+
+func (s *Store) DeleteProfile(ctx context.Context, kind string) error {
+	tag, err := s.pool.Exec(ctx, `DELETE FROM device_profiles WHERE kind = $1`, kind)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return store.ErrNotFound
+	}
+	return nil
+}
+
+func scanProfile(row pgx.Row) (*model.DeviceProfile, error) {
+	var p model.DeviceProfile
+	var aspectsRaw, queuesRaw []byte
+	err := row.Scan(
+		&p.Kind, &aspectsRaw, &queuesRaw,
+		&p.FetchStateQueue, &p.SupportsLiveState, &p.SerialExecution, &p.UpdatedAt,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, store.ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	if len(aspectsRaw) > 0 {
+		if err := json.Unmarshal(aspectsRaw, &p.Aspects); err != nil {
+			return nil, err
+		}
+	}
+	if len(queuesRaw) > 0 {
+		if err := json.Unmarshal(queuesRaw, &p.DefaultQueues); err != nil {
+			return nil, err
+		}
+	}
+	if p.DefaultQueues == nil {
+		p.DefaultQueues = map[string]string{}
+	}
+	return &p, nil
 }

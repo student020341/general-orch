@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"orch/internal/aspects"
 	"orch/internal/events"
 	"orch/internal/model"
 	"orch/internal/reconciler"
@@ -26,7 +27,9 @@ func TestStateManagerPartialUpdateAndDriftReplan(t *testing.T) {
 	ctx := context.Background()
 	st := memory.New()
 	pub := &fakePub{}
-	mgr := New(st, reconciler.New(reconciler.DefaultCatalog()), pub, nil)
+	rec := reconciler.New(reconciler.DefaultCatalog())
+	aspects.RegisterAll(rec)
+	mgr := New(st, rec, pub, nil)
 
 	// 1. Submit partial patch 1 (light1)
 	if err := mgr.HandleIntentRequested(ctx, events.IntentRequestedEvent{
@@ -131,5 +134,37 @@ func TestStateManagerPartialUpdateAndDriftReplan(t *testing.T) {
 	}
 	if replanned.Steps[1].Payload["delta"] != float64(45) {
 		t.Fatalf("expected delta 45 from drifted state 45->90, got %v", replanned.Steps[1].Payload["delta"])
+	}
+}
+
+func TestStateManagerReplaceTarget(t *testing.T) {
+	ctx := context.Background()
+	st := memory.New()
+	pub := &fakePub{}
+	rec := reconciler.New(reconciler.DefaultCatalog())
+	aspects.RegisterAll(rec)
+	mgr := New(st, rec, pub, nil)
+
+	if err := mgr.HandleIntentRequested(ctx, events.IntentRequestedEvent{
+		EntityID: "lamp-replace",
+		Kind:     "beacon_bot",
+		Vendor:   "mock",
+		Patch:    model.State{"light1": model.State{"r": 1, "g": 2, "b": 3}, "light2": model.State{"r": 4, "g": 5, "b": 6}},
+	}); err != nil {
+		t.Fatalf("lamp initial intent: %v", err)
+	}
+	if err := mgr.HandleIntentRequested(ctx, events.IntentRequestedEvent{
+		EntityID: "lamp-replace",
+		Patch:    model.State{"light1": model.State{"r": 9, "g": 9, "b": 9}},
+		Replace:  true,
+	}); err != nil {
+		t.Fatalf("lamp replace intent: %v", err)
+	}
+	replaced, err := st.GetEntity(ctx, "lamp-replace")
+	if err != nil {
+		t.Fatalf("get replaced entity: %v", err)
+	}
+	if _, hasLight2 := replaced.Target["light2"]; hasLight2 {
+		t.Fatalf("expected Replace=true to remove light2 from target, got %#v", replaced.Target)
 	}
 }

@@ -39,7 +39,7 @@ func main() {
 
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
-		Handler:           gateway.New(st, natsBus),
+		Handler:           gateway.New(st, natsBus, natsBus, cfg.ProfilesPath, cfg.WebDir),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 

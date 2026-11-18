@@ -15,6 +15,7 @@ const (
 	SubjectPlanPrefix          = "orch.plan.created"
 	SubjectStepCompletedPrefix = "orch.execution.step_completed"
 	SubjectFinishedPrefix      = "orch.execution.finished"
+	SubjectCatalogReloaded     = "orch.catalog.reloaded"
 )
 
 // IntentSubject formats the NATS subject for an incoming entity intent patch.
@@ -44,6 +45,7 @@ type IntentRequestedEvent struct {
 	Vendor      string      `json:"vendor"`
 	TaskQueue   string      `json:"task_queue,omitempty"`
 	Patch       model.State `json:"patch"`
+	Replace     bool        `json:"replace,omitempty"`
 	RequestedAt time.Time   `json:"requested_at"`
 }
 
@@ -86,4 +88,10 @@ type ExecutionFinishedEvent struct {
 	Outcome    ExecutionOutcome `json:"outcome"`
 	Error      string           `json:"error,omitempty"`
 	FinishedAt time.Time        `json:"finished_at"`
+}
+
+// CatalogReloadedEvent broadcasts that device profiles changed in the store.
+type CatalogReloadedEvent struct {
+	Source     string    `json:"source"`
+	ReloadedAt time.Time `json:"reloaded_at"`
 }

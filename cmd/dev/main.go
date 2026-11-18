@@ -13,6 +13,7 @@ import (
 
 	"go.temporal.io/sdk/client"
 
+	"orch/internal/aspects"
 	"orch/internal/bus"
 	"orch/internal/config"
 	"orch/internal/driver"
@@ -98,8 +99,13 @@ func main() {
 	defer piWorker.Stop()
 
 	// Start NATS-backed StateManager and PlanStarter.
-	rec := reconciler.New(reconciler.DefaultCatalog())
+	rec := reconciler.New(reconciler.NewCatalog(nil))
+	aspects.RegisterAll(rec)
 	mgr := statemanager.New(st, rec, smBus, baseLogger.With("component", "state-manager"))
+	if err := mgr.SyncCatalog(ctx, cfg.ProfilesPath); err != nil {
+		baseLogger.Error("sync catalog failed", "err", err)
+		os.Exit(1)
+	}
 	starter := orchestrator.NewPlanStarter(tc, st, baseLogger.With("component", "workflow-runner"))
 
 	errCh := make(chan error, 3)
@@ -107,7 +113,7 @@ func main() {
 	go func() { errCh <- starter.Run(ctx, wfBus) }()
 
 	// Mount Gateway plus dev-only mock device inspection/drift endpoints.
-	gw := gateway.New(st, gwBus)
+	gw := gateway.New(st, gwBus, gwBus, cfg.ProfilesPath, cfg.WebDir)
 	rootMux := http.NewServeMux()
 	rootMux.HandleFunc("GET /_dev/mock/{id}", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

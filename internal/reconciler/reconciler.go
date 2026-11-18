@@ -2,8 +2,7 @@ package reconciler
 
 import (
 	"fmt"
-	"math"
-	"reflect"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -23,29 +22,43 @@ type AspectPlanner interface {
 	Plan(entity *model.Entity, taskQueue string) (AspectResult, error)
 }
 
-// Reconciler diffs an entity's current and target state and emits a DAG Plan.
+// Reconciler diffs an entity's current and target state and emits a DAG Plan
+// using registered AspectPlanners and a hot-reloadable ProfileCatalog.
 type Reconciler struct {
 	catalog *ProfileCatalog
+	mu      sync.RWMutex
 	aspects map[string]AspectPlanner
 }
 
-// New creates a Reconciler with the given device profile catalog and default aspects.
+// New creates a generic Reconciler with no built-in device-specific aspects.
+// Register aspect planners via RegisterAspect or aspects.RegisterAll.
 func New(catalog *ProfileCatalog) *Reconciler {
 	if catalog == nil {
 		catalog = DefaultCatalog()
 	}
-	r := &Reconciler{
+	return &Reconciler{
 		catalog: catalog,
 		aspects: make(map[string]AspectPlanner),
 	}
-	r.RegisterAspect(lightsAspect{})
-	r.RegisterAspect(rotationAspect{})
-	return r
+}
+
+// Catalog returns the ProfileCatalog used by this Reconciler.
+func (r *Reconciler) Catalog() *ProfileCatalog {
+	return r.catalog
 }
 
 // RegisterAspect registers or overrides an AspectPlanner by name.
 func (r *Reconciler) RegisterAspect(ap AspectPlanner) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.aspects[ap.Name()] = ap
+}
+
+func (r *Reconciler) getAspect(name string) (AspectPlanner, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	ap, ok := r.aspects[name]
+	return ap, ok
 }
 
 // Reconcile produces a DAG Plan to converge entity.Current toward entity.Target.
@@ -60,7 +73,7 @@ func (r *Reconciler) Reconcile(entity *model.Entity) (*model.Plan, error) {
 	var driftKeys []string
 
 	for _, aspectName := range profile.Aspects {
-		ap, ok := r.aspects[aspectName]
+		ap, ok := r.getAspect(aspectName)
 		if !ok {
 			return nil, fmt.Errorf("missing aspect planner %q for kind %q", aspectName, entity.Kind)
 		}
@@ -120,169 +133,4 @@ func (r *Reconciler) Reconcile(entity *model.Entity) (*model.Plan, error) {
 		CreatedAt: now,
 		UpdatedAt: now,
 	}, nil
-}
-
-type lightsAspect struct{}
-
-func (lightsAspect) Name() string { return "lights" }
-
-func (lightsAspect) Plan(entity *model.Entity, taskQueue string) (AspectResult, error) {
-	var steps []model.PlanStep
-	for _, key := range []string{"light1", "light2"} {
-		rawTarget, hasTarget := entity.Target[key]
-		if !hasTarget {
-			continue
-		}
-		targetColor, err := parseColor(rawTarget)
-		if err != nil {
-			return AspectResult{}, fmt.Errorf("%s: %w", key, err)
-		}
-		if rawCurr, hasCurr := entity.Current[key]; hasCurr {
-			if currColor, err := parseColor(rawCurr); err == nil && reflect.DeepEqual(currColor, targetColor) {
-				continue
-			}
-		}
-		steps = append(steps, model.PlanStep{
-			ID:         "set-" + key,
-			TaskQueue:  taskQueue,
-			Activity:   "ExecuteCapability",
-			Capability: "set_light",
-			Vendor:     entity.Vendor,
-			Payload: model.State{
-				"entity_id": entity.ID,
-				"light":     key,
-				"color":     targetColor,
-			},
-			Status: model.StepPending,
-		})
-	}
-	return AspectResult{Steps: steps}, nil
-}
-
-type rotationAspect struct{}
-
-func (rotationAspect) Name() string { return "rotation" }
-
-func (rotationAspect) Plan(entity *model.Entity, taskQueue string) (AspectResult, error) {
-	rawTarget, hasTarget := entity.Target["rotation"]
-	if !hasTarget {
-		return AspectResult{}, nil
-	}
-	targetAngle, err := parseAngle(rawTarget)
-	if err != nil {
-		return AspectResult{}, fmt.Errorf("rotation: %w", err)
-	}
-
-	var currentAngle float64
-	if rawCurr, hasCurr := entity.Current["rotation"]; hasCurr {
-		if parsed, err := parseAngle(rawCurr); err == nil {
-			currentAngle = parsed
-		}
-	}
-
-	delta := ShortestTurnDelta(currentAngle, targetAngle)
-	if math.Abs(delta) < 1e-6 {
-		return AspectResult{}, nil
-	}
-
-	step := model.PlanStep{
-		ID:         "turn",
-		TaskQueue:  taskQueue,
-		Activity:   "ExecuteCapability",
-		Capability: "turn",
-		Vendor:     entity.Vendor,
-		Payload: model.State{
-			"entity_id":     entity.ID,
-			"delta":         delta,
-			"expected_from": currentAngle,
-			"expected_to":   targetAngle,
-		},
-		Status: model.StepPending,
-	}
-	return AspectResult{
-		Steps:     []model.PlanStep{step},
-		DriftKeys: []string{"rotation"},
-	}, nil
-}
-
-// ShortestTurnDelta returns the signed rotation in (-180, 180] needed to turn
-// from currentDeg to targetDeg.
-func ShortestTurnDelta(currentDeg, targetDeg float64) float64 {
-	curr := NormalizeAngle(currentDeg)
-	tgt := NormalizeAngle(targetDeg)
-	delta := math.Mod(tgt-curr, 360)
-	if delta > 180 {
-		delta -= 360
-	} else if delta <= -180 {
-		delta += 360
-	}
-	if math.Abs(delta) < 1e-9 {
-		return 0
-	}
-	return delta
-}
-
-// NormalizeAngle normalizes any degree value into [0, 360).
-func NormalizeAngle(deg float64) float64 {
-	m := math.Mod(deg, 360)
-	if m < 0 {
-		m += 360
-	}
-	if m == 360 {
-		return 0
-	}
-	return m
-}
-
-func parseColor(v any) (model.State, error) {
-	m, ok := v.(map[string]any)
-	if !ok {
-		if sm, ok2 := v.(model.State); ok2 {
-			m = map[string]any(sm)
-		} else {
-			return nil, fmt.Errorf("expected RGB object, got %T", v)
-		}
-	}
-	out := model.State{}
-	for _, ch := range []string{"r", "g", "b"} {
-		val, exists := m[ch]
-		if !exists {
-			return nil, fmt.Errorf("missing channel %q", ch)
-		}
-		num, err := toFloat(val)
-		if err != nil {
-			return nil, fmt.Errorf("channel %q: %w", ch, err)
-		}
-		if num < 0 || num > 255 || math.Trunc(num) != num {
-			return nil, fmt.Errorf("channel %q must be integer 0..255, got %v", ch, num)
-		}
-		out[ch] = float64(int(num))
-	}
-	return out, nil
-}
-
-func parseAngle(v any) (float64, error) {
-	num, err := toFloat(v)
-	if err != nil {
-		return 0, err
-	}
-	if math.IsNaN(num) || math.IsInf(num, 0) {
-		return 0, fmt.Errorf("invalid angle %v", num)
-	}
-	return NormalizeAngle(num), nil
-}
-
-func toFloat(v any) (float64, error) {
-	switch n := v.(type) {
-	case int:
-		return float64(n), nil
-	case int64:
-		return float64(n), nil
-	case float64:
-		return n, nil
-	case float32:
-		return float64(n), nil
-	default:
-		return 0, fmt.Errorf("expected number, got %T", v)
-	}
 }

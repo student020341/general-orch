@@ -80,6 +80,18 @@ type Plan struct {
 	UpdatedAt time.Time  `json:"updated_at"`
 }
 
+// DeviceProfile describes the capabilities, default worker queues, and hardware
+// constraints for a supported entity kind.
+type DeviceProfile struct {
+	Kind              string            `json:"kind"`
+	Aspects           []string          `json:"aspects"`
+	DefaultQueues     map[string]string `json:"default_queues"`
+	FetchStateQueue   string            `json:"fetch_state_queue"`
+	SupportsLiveState bool              `json:"supports_live_state"`
+	SerialExecution   bool              `json:"serial_execution"`
+	UpdatedAt         time.Time         `json:"updated_at,omitempty"`
+}
+
 // CloneState returns a deep copy of a State map via JSON round-trip normalization.
 func CloneState(src State) State {
 	if len(src) == 0 {
