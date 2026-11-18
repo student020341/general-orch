@@ -8,7 +8,7 @@ import (
 	"orch/internal/reconciler"
 )
 
-// Aspect diffs target rotation in degrees and emits relative turn(delta) steps.
+// Aspect diffs one named rotation resource slot (degrees) and emits relative turn(delta) steps.
 type Aspect struct{}
 
 // New returns a rotation AspectPlanner.
@@ -16,18 +16,26 @@ func New() Aspect { return Aspect{} }
 
 func (Aspect) Name() string { return "rotation" }
 
-func (Aspect) Plan(entity *model.Entity, taskQueue string) (reconciler.AspectResult, error) {
-	rawTarget, hasTarget := entity.Target["rotation"]
-	if !hasTarget {
+func (Aspect) Schema() model.AspectSchema {
+	return model.AspectSchema{
+		Type:        "rotation",
+		Description: "Target angle in degrees (0-359), executed via shortest relative turn",
+		Example:     90,
+	}
+}
+
+func (Aspect) Plan(entity *model.Entity, resource string, taskQueue string) (reconciler.AspectResult, error) {
+	rawTarget, hasTarget := entity.Target[resource]
+	if !hasTarget || rawTarget == nil {
 		return reconciler.AspectResult{}, nil
 	}
 	targetAngle, err := parseAngle(rawTarget)
 	if err != nil {
-		return reconciler.AspectResult{}, fmt.Errorf("rotation: %w", err)
+		return reconciler.AspectResult{}, fmt.Errorf("%s: %w", resource, err)
 	}
 
 	var currentAngle float64
-	if rawCurr, hasCurr := entity.Current["rotation"]; hasCurr {
+	if rawCurr, hasCurr := entity.Current[resource]; hasCurr {
 		if parsed, err := parseAngle(rawCurr); err == nil {
 			currentAngle = parsed
 		}
@@ -38,14 +46,20 @@ func (Aspect) Plan(entity *model.Entity, taskQueue string) (reconciler.AspectRes
 		return reconciler.AspectResult{}, nil
 	}
 
+	stepID := "turn"
+	if resource != "rotation" {
+		stepID = "turn-" + resource
+	}
+
 	step := model.PlanStep{
-		ID:         "turn",
+		ID:         stepID,
 		TaskQueue:  taskQueue,
 		Activity:   "ExecuteCapability",
 		Capability: "turn",
 		Vendor:     entity.Vendor,
 		Payload: model.State{
 			"entity_id":     entity.ID,
+			"resource":      resource,
 			"delta":         delta,
 			"expected_from": currentAngle,
 			"expected_to":   targetAngle,
@@ -54,7 +68,7 @@ func (Aspect) Plan(entity *model.Entity, taskQueue string) (reconciler.AspectRes
 	}
 	return reconciler.AspectResult{
 		Steps:     []model.PlanStep{step},
-		DriftKeys: []string{"rotation"},
+		DriftKeys: []string{resource},
 	}, nil
 }
 

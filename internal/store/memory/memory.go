@@ -240,7 +240,10 @@ func (s *Store) DeleteProfile(_ context.Context, kind string) error {
 
 func cloneProfile(p model.DeviceProfile) model.DeviceProfile {
 	cp := p
-	cp.Aspects = slices.Clone(p.Aspects)
+	cp.Resources = maps.Clone(p.Resources)
+	if cp.Resources == nil {
+		cp.Resources = map[string]string{}
+	}
 	cp.DefaultQueues = maps.Clone(p.DefaultQueues)
 	if cp.DefaultQueues == nil {
 		cp.DefaultQueues = map[string]string{}

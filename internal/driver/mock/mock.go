@@ -69,23 +69,30 @@ func (d *Driver) Execute(ctx context.Context, capability string, payload model.S
 
 	switch capability {
 	case "set_light":
-		light, _ := payload["light"].(string)
-		color, ok := payload["color"]
-		if light == "" || !ok {
-			return nil, fmt.Errorf("set_light requires light and color")
+		resource, _ := payload["resource"].(string)
+		if resource == "" {
+			resource, _ = payload["light"].(string)
 		}
-		dev[light] = model.CloneState(toState(color))
-		return model.State{light: model.CloneState(toState(color))}, nil
+		color, ok := payload["color"]
+		if resource == "" || !ok {
+			return nil, fmt.Errorf("set_light requires resource and color")
+		}
+		dev[resource] = model.CloneState(toState(color))
+		return model.State{resource: model.CloneState(toState(color))}, nil
 
 	case "turn":
+		resource, _ := payload["resource"].(string)
+		if resource == "" {
+			resource = "rotation"
+		}
 		delta, err := toFloat(payload["delta"])
 		if err != nil {
 			return nil, fmt.Errorf("turn requires numeric delta: %w", err)
 		}
-		curr, _ := toFloat(dev["rotation"])
+		curr, _ := toFloat(dev[resource])
 		next := normalizeAngle(curr + delta)
-		dev["rotation"] = next
-		return model.State{"rotation": next}, nil
+		dev[resource] = next
+		return model.State{resource: next}, nil
 
 	default:
 		return nil, fmt.Errorf("unsupported capability %q", capability)

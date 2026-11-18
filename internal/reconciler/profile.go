@@ -20,10 +20,25 @@ type ProfileCatalog struct {
 func DefaultProfiles() []model.DeviceProfile {
 	return []model.DeviceProfile{
 		{
-			Kind:    "beacon_bot",
-			Aspects: []string{"lights", "rotation"},
+			Kind: "lamp",
+			Resources: map[string]string{
+				"main": "light",
+			},
 			DefaultQueues: map[string]string{
-				"lights":   "lighting-workers",
+				"light": "lighting-workers",
+			},
+			SupportsLiveState: false,
+			SerialExecution:   false,
+		},
+		{
+			Kind: "beacon_bot",
+			Resources: map[string]string{
+				"light1":   "light",
+				"light2":   "light",
+				"rotation": "rotation",
+			},
+			DefaultQueues: map[string]string{
+				"light":    "lighting-workers",
 				"rotation": "motion-workers",
 			},
 			FetchStateQueue:   "motion-workers",
@@ -31,10 +46,14 @@ func DefaultProfiles() []model.DeviceProfile {
 			SerialExecution:   false,
 		},
 		{
-			Kind:    "beacon_bot_serial",
-			Aspects: []string{"lights", "rotation"},
+			Kind: "beacon_bot_serial",
+			Resources: map[string]string{
+				"light1":   "light",
+				"light2":   "light",
+				"rotation": "rotation",
+			},
 			DefaultQueues: map[string]string{
-				"lights":   "pi-workers",
+				"light":    "pi-workers",
 				"rotation": "pi-workers",
 			},
 			FetchStateQueue:   "pi-workers",
@@ -108,11 +127,14 @@ func (c *ProfileCatalog) Lookup(kind string) (model.DeviceProfile, error) {
 	return p, nil
 }
 
-func resolveTaskQueue(entity *model.Entity, profile model.DeviceProfile, aspect string) string {
+func resolveTaskQueue(entity *model.Entity, profile model.DeviceProfile, resource, aspectType string) string {
 	if entity.TaskQueue != "" {
 		return entity.TaskQueue
 	}
-	if q, ok := profile.DefaultQueues[aspect]; ok && q != "" {
+	if q, ok := profile.DefaultQueues[resource]; ok && q != "" {
+		return q
+	}
+	if q, ok := profile.DefaultQueues[aspectType]; ok && q != "" {
 		return q
 	}
 	if profile.FetchStateQueue != "" {

@@ -2,6 +2,7 @@ package reconciler
 
 import (
 	"fmt"
+	"slices"
 	"sync"
 	"time"
 
@@ -16,10 +17,12 @@ type AspectResult struct {
 	DriftKeys []string
 }
 
-// AspectPlanner diffs a single capability slice between current and target state.
+// AspectPlanner diffs a single named resource slot (e.g. "light1", "eth1", "rotation")
+// between current and target state.
 type AspectPlanner interface {
 	Name() string
-	Plan(entity *model.Entity, taskQueue string) (AspectResult, error)
+	Schema() model.AspectSchema
+	Plan(entity *model.Entity, resource string, taskQueue string) (AspectResult, error)
 }
 
 // Reconciler diffs an entity's current and target state and emits a DAG Plan
@@ -54,6 +57,30 @@ func (r *Reconciler) RegisterAspect(ap AspectPlanner) {
 	r.aspects[ap.Name()] = ap
 }
 
+// AspectSchemas returns sorted contract schemas for all registered aspect types.
+func (r *Reconciler) AspectSchemas() []model.AspectSchema {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make([]model.AspectSchema, 0, len(r.aspects))
+	for _, ap := range r.aspects {
+		s := ap.Schema()
+		if s.Type == "" {
+			s.Type = ap.Name()
+		}
+		out = append(out, s)
+	}
+	slices.SortFunc(out, func(a, b model.AspectSchema) int {
+		if a.Type < b.Type {
+			return -1
+		}
+		if a.Type > b.Type {
+			return 1
+		}
+		return 0
+	})
+	return out
+}
+
 func (r *Reconciler) getAspect(name string) (AspectPlanner, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -61,26 +88,45 @@ func (r *Reconciler) getAspect(name string) (AspectPlanner, bool) {
 	return ap, ok
 }
 
-// Reconcile produces a DAG Plan to converge entity.Current toward entity.Target.
-// Returns (nil, nil) when no changes are required.
+// Reconcile validates entity.Target against the profile's declared resources,
+// diffs each slot, and emits a DAG Plan. Returns (nil, nil) when already converged.
 func (r *Reconciler) Reconcile(entity *model.Entity) (*model.Plan, error) {
 	profile, err := r.catalog.Lookup(entity.Kind)
 	if err != nil {
 		return nil, err
 	}
 
+	// Validate that every key in target corresponds to a declared resource slot on this kind.
+	var unknownKeys []string
+	for key := range entity.Target {
+		if _, ok := profile.Resources[key]; !ok {
+			unknownKeys = append(unknownKeys, key)
+		}
+	}
+	if len(unknownKeys) > 0 {
+		slices.Sort(unknownKeys)
+		return nil, fmt.Errorf("unknown resource(s) %v for kind %q", unknownKeys, entity.Kind)
+	}
+
+	resourceNames := make([]string, 0, len(profile.Resources))
+	for name := range profile.Resources {
+		resourceNames = append(resourceNames, name)
+	}
+	slices.Sort(resourceNames)
+
 	var actionSteps []model.PlanStep
 	var driftKeys []string
 
-	for _, aspectName := range profile.Aspects {
-		ap, ok := r.getAspect(aspectName)
+	for _, resName := range resourceNames {
+		aspectType := profile.Resources[resName]
+		ap, ok := r.getAspect(aspectType)
 		if !ok {
-			return nil, fmt.Errorf("missing aspect planner %q for kind %q", aspectName, entity.Kind)
+			return nil, fmt.Errorf("missing aspect planner %q for resource %q (kind %q)", aspectType, resName, entity.Kind)
 		}
-		queue := resolveTaskQueue(entity, profile, aspectName)
-		res, err := ap.Plan(entity, queue)
+		queue := resolveTaskQueue(entity, profile, resName, aspectType)
+		res, err := ap.Plan(entity, resName, queue)
 		if err != nil {
-			return nil, fmt.Errorf("plan aspect %q: %w", aspectName, err)
+			return nil, fmt.Errorf("plan resource %q (%s): %w", resName, aspectType, err)
 		}
 		actionSteps = append(actionSteps, res.Steps...)
 		driftKeys = append(driftKeys, res.DriftKeys...)

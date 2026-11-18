@@ -8,7 +8,7 @@ import (
 	"orch/internal/reconciler"
 )
 
-func TestBeaconBotAspectsIntegration(t *testing.T) {
+func TestBeaconBotAndLampAspectsIntegration(t *testing.T) {
 	rec := reconciler.New(reconciler.DefaultCatalog())
 	RegisterAll(rec)
 
@@ -43,6 +43,22 @@ func TestBeaconBotAspectsIntegration(t *testing.T) {
 		turnStep := plan.Steps[3]
 		if turnStep.Payload["delta"] != float64(20) {
 			t.Fatalf("expected turn delta 20, got %v", turnStep.Payload["delta"])
+		}
+	})
+
+	t.Run("1-light lamp rejects unknown light2 resource", func(t *testing.T) {
+		e := &model.Entity{
+			ID:      "lamp-1",
+			Kind:    "lamp",
+			Vendor:  "mock",
+			Version: 1,
+			Target: model.State{
+				"main":   model.State{"r": 255, "g": 200, "b": 80},
+				"light2": model.State{"r": 1, "g": 2, "b": 3},
+			},
+		}
+		if _, err := rec.Reconcile(e); err == nil {
+			t.Fatalf("expected error for unknown resource light2 on lamp")
 		}
 	})
 

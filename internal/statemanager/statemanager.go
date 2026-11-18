@@ -43,7 +43,16 @@ func (m *Manager) SyncCatalog(ctx context.Context, profilesPath string) error {
 	if err != nil {
 		return fmt.Errorf("list profiles: %w", err)
 	}
-	if len(existing) == 0 {
+	needsSeed := len(existing) == 0
+	if !needsSeed {
+		for _, p := range existing {
+			if len(p.Resources) == 0 {
+				needsSeed = true
+				break
+			}
+		}
+	}
+	if needsSeed {
 		if profilesPath != "" {
 			if n, err := store.SyncProfilesFromFile(ctx, m.store, profilesPath); err == nil {
 				m.logger.Info("seeded device catalog from file", "path", profilesPath, "count", n)

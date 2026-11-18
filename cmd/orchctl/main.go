@@ -208,11 +208,12 @@ func (c *apiClient) cmdCatalog(args []string) error {
 			return err
 		}
 		tw := tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)
-		fmt.Fprintln(tw, "KIND\tASPECTS\tLIVE_STATE\tSERIAL\tFETCH_QUEUE\tQUEUES")
+		fmt.Fprintln(tw, "KIND\tRESOURCES\tLIVE_STATE\tSERIAL\tFETCH_QUEUE\tQUEUES")
 		for _, p := range profiles {
+			resRaw, _ := json.Marshal(p.Resources)
 			qRaw, _ := json.Marshal(p.DefaultQueues)
 			fmt.Fprintf(tw, "%s\t%s\t%v\t%v\t%s\t%s\n",
-				p.Kind, strings.Join(p.Aspects, ","), p.SupportsLiveState, p.SerialExecution, p.FetchStateQueue, string(qRaw))
+				p.Kind, string(resRaw), p.SupportsLiveState, p.SerialExecution, p.FetchStateQueue, string(qRaw))
 		}
 		return tw.Flush()
 

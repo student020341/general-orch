@@ -7,6 +7,7 @@ import (
 	"os"
 	"time"
 
+	"orch/internal/aspects"
 	"orch/internal/bus"
 	"orch/internal/events"
 	"orch/internal/model"
@@ -49,6 +50,7 @@ func New(st store.Store, pub bus.Publisher, bcast bus.Broadcaster, profilesPath 
 	s.mux.HandleFunc("PUT /entities/{id}/intent", s.handlePutIntent)
 	s.mux.HandleFunc("POST /entities/{id}/intent", s.handlePutIntent)
 
+	s.mux.HandleFunc("GET /catalog/aspects", s.handleListAspects)
 	s.mux.HandleFunc("GET /catalog/profiles", s.handleListProfiles)
 	s.mux.HandleFunc("GET /catalog/profiles/{kind}", s.handleGetProfile)
 	s.mux.HandleFunc("PUT /catalog/profiles/{kind}", s.handlePutProfile)
@@ -170,6 +172,10 @@ func (s *Server) handlePutIntent(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (s *Server) handleListAspects(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, aspects.Schemas())
+}
+
 func (s *Server) handleListProfiles(w http.ResponseWriter, r *http.Request) {
 	profiles, err := s.store.ListProfiles(r.Context())
 	if err != nil {
@@ -205,8 +211,8 @@ func (s *Server) handlePutProfile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p.Kind = kind
-	if len(p.Aspects) == 0 {
-		writeError(w, http.StatusBadRequest, "aspects must not be empty")
+	if len(p.Resources) == 0 {
+		writeError(w, http.StatusBadRequest, "resources must not be empty")
 		return
 	}
 	saved, err := s.store.UpsertProfile(r.Context(), p)

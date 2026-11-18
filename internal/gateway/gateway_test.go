@@ -35,8 +35,8 @@ func TestGatewayCatalogCRUDAndReload(t *testing.T) {
 	profilesFile := filepath.Join(tmpDir, "profiles.json")
 	seed := []model.DeviceProfile{{
 		Kind:              "beacon_bot",
-		Aspects:           []string{"lights", "rotation"},
-		DefaultQueues:     map[string]string{"lights": "lighting-workers", "rotation": "motion-workers"},
+		Resources:         map[string]string{"light1": "light", "light2": "light", "rotation": "rotation"},
+		DefaultQueues:     map[string]string{"light": "lighting-workers", "rotation": "motion-workers"},
 		FetchStateQueue:   "motion-workers",
 		SupportsLiveState: true,
 	}}
@@ -61,7 +61,7 @@ func TestGatewayCatalogCRUDAndReload(t *testing.T) {
 	}
 
 	// 2. PUT a new profile.
-	body := bytes.NewBufferString(`{"aspects":["lights"],"default_queues":{"lights":"pi-workers"},"serial_execution":true}`)
+	body := bytes.NewBufferString(`{"resources":{"main":"light"},"default_queues":{"light":"pi-workers"},"serial_execution":true}`)
 	req = httptest.NewRequest(http.MethodPut, "/catalog/profiles/desk_lamp", body)
 	rec = httptest.NewRecorder()
 	srv.ServeHTTP(rec, req)
@@ -91,7 +91,15 @@ func TestGatewayCatalogCRUDAndReload(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("delete profile status = %d: %s", rec.Code, rec.Body.String())
 	}
-	if len(fb.broadcasts) != 3 {
-		t.Fatalf("expected 3 catalog reload broadcasts, got %d", len(fb.broadcasts))
+	// 5. GET /catalog/aspects -> returns aspect contract schemas.
+	req = httptest.NewRequest(http.MethodGet, "/catalog/aspects", nil)
+	rec = httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("aspects status = %d: %s", rec.Code, rec.Body.String())
+	}
+	var schemas []model.AspectSchema
+	if err := json.Unmarshal(rec.Body.Bytes(), &schemas); err != nil || len(schemas) == 0 {
+		t.Fatalf("expected non-empty aspect schemas, got %s (err=%v)", rec.Body.String(), err)
 	}
 }

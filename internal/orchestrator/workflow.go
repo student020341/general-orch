@@ -221,17 +221,13 @@ func hasDrift(payload model.State, live model.State) bool {
 	return false
 }
 
-func valuesMatchForDrift(key string, expectedVal, actualVal any) bool {
-	if key == "rotation" {
+func valuesMatchForDrift(_ string, expectedVal, actualVal any) bool {
+	if actNum, actOK := toFloat(actualVal); actOK {
 		expNum, expOK := toFloat(expectedVal)
 		if expectedVal == nil {
 			expNum, expOK = 0, true
 		}
-		actNum, actOK := toFloat(actualVal)
-		if actualVal == nil {
-			actNum, actOK = 0, true
-		}
-		if expOK && actOK {
+		if expOK {
 			return math.Abs(expNum-actNum) < 1e-6
 		}
 	}

@@ -1,9 +1,25 @@
 [
   {
-    "kind": "beacon_bot",
-    "aspects": ["lights", "rotation"],
+    "kind": "lamp",
+    "resources": {
+      "main": "light"
+    },
     "default_queues": {
-      "lights": "lighting-workers",
+      "light": "lighting-workers"
+    },
+    "fetch_state_queue": "",
+    "supports_live_state": false,
+    "serial_execution": false
+  },
+  {
+    "kind": "beacon_bot",
+    "resources": {
+      "light1": "light",
+      "light2": "light",
+      "rotation": "rotation"
+    },
+    "default_queues": {
+      "light": "lighting-workers",
       "rotation": "motion-workers"
     },
     "fetch_state_queue": "motion-workers",
@@ -12,9 +28,13 @@
   },
   {
     "kind": "beacon_bot_serial",
-    "aspects": ["lights", "rotation"],
+    "resources": {
+      "light1": "light",
+      "light2": "light",
+      "rotation": "rotation"
+    },
     "default_queues": {
-      "lights": "pi-workers",
+      "light": "pi-workers",
       "rotation": "pi-workers"
     },
     "fetch_state_queue": "pi-workers",

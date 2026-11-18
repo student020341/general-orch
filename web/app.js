@@ -2,6 +2,7 @@ const state = {
   selectedEntityId: null,
   selectedMissingKind: "",
   profiles: [],
+  aspects: [],
   entities: [],
 };
 
@@ -33,22 +34,40 @@ function escapeHtml(s) {
     .replaceAll('"', "&quot;");
 }
 
-function renderVisual(curr) {
+function isRgbObject(v) {
+  return v && typeof v === "object" && "r" in v && "g" in v && "b" in v;
+}
+
+function renderVisual(e) {
+  const curr = e.current;
   if (!curr) return "-";
+  const profile = state.profiles.find((p) => p.kind === e.kind);
   const parts = [];
-  const lightKeys = Object.keys(curr)
-    .filter((k) => k === "light" || (k.startsWith("light") && k !== "lights"))
-    .sort();
-  for (const key of lightKeys) {
-    const c = curr[key];
-    if (c && typeof c === "object" && "r" in c && "g" in c && "b" in c) {
-      parts.push(
-        `<span class="swatch" title="${escapeHtml(key)}: rgb(${c.r},${c.g},${c.b})" style="background:rgb(${c.r},${c.g},${c.b})"></span>`
-      );
+
+  if (profile && profile.resources) {
+    const names = Object.keys(profile.resources).sort();
+    for (const name of names) {
+      const val = curr[name];
+      if (val === undefined) continue;
+      if (profile.resources[name] === "light" && isRgbObject(val)) {
+        parts.push(
+          `<span class="swatch" title="${escapeHtml(name)}: rgb(${val.r},${val.g},${val.b})" style="background:rgb(${val.r},${val.g},${val.b})"></span>`
+        );
+      } else if (profile.resources[name] === "rotation" && typeof val === "number") {
+        parts.push(`<code title="${escapeHtml(name)}">${val}°</code>`);
+      }
     }
-  }
-  if (typeof curr.rotation === "number") {
-    parts.push(`<code>${curr.rotation}°</code>`);
+  } else {
+    for (const key of Object.keys(curr).sort()) {
+      const val = curr[key];
+      if (isRgbObject(val)) {
+        parts.push(
+          `<span class="swatch" title="${escapeHtml(key)}: rgb(${val.r},${val.g},${val.b})" style="background:rgb(${val.r},${val.g},${val.b})"></span>`
+        );
+      } else if (typeof val === "number") {
+        parts.push(`<code title="${escapeHtml(key)}">${val}°</code>`);
+      }
+    }
   }
   return parts.length ? `<div class="visual-row">${parts.join("")}</div>` : "-";
 }
@@ -88,7 +107,7 @@ async function refreshEntities() {
           <td>${escapeHtml(e.kind)}${kindBadge}<div class="muted">${escapeHtml(e.vendor)}${e.task_queue ? " · " + escapeHtml(e.task_queue) : ""}</div></td>
           <td>${pill(e.status)}${errLine}</td>
           <td>v${e.version}</td>
-          <td>${renderVisual(e.current)}</td>
+          <td>${renderVisual(e)}</td>
           <td class="diff-cell">
             <code>curr: ${escapeHtml(JSON.stringify(e.current))}</code>
             <code>tgt:  ${escapeHtml(JSON.stringify(e.target))}</code>
@@ -141,6 +160,21 @@ function syncKindSelect(desiredKind) {
   if (prev && options.some((o) => o.value === prev)) {
     select.value = prev;
   }
+  updateKindContractHint();
+}
+
+function updateKindContractHint() {
+  const el = document.getElementById("kind-contract");
+  const kind = document.getElementById("intent-kind").value;
+  const p = state.profiles.find((x) => x.kind === kind);
+  if (!p) {
+    el.textContent = kind ? `No profile found for "${kind}"` : "";
+    return;
+  }
+  const entries = Object.keys(p.resources || {})
+    .sort()
+    .map((k) => `${k} (${p.resources[k]})`);
+  el.textContent = entries.length ? `Resources: ${entries.join(", ")}` : "No resources declared";
 }
 
 async function refreshSelectedDetails() {
@@ -204,21 +238,36 @@ async function refreshSelectedDetails() {
 }
 
 async function refreshCatalog() {
-  const profiles = (await api("GET", "/catalog/profiles")) || [];
-  state.profiles = profiles;
+  const [profiles, aspectSchemas] = await Promise.all([
+    api("GET", "/catalog/profiles"),
+    api("GET", "/catalog/aspects").catch(() => []),
+  ]);
+  state.profiles = profiles || [];
+  state.aspects = aspectSchemas || [];
 
-  if (state.selectedMissingKind && profiles.some((p) => p.kind === state.selectedMissingKind)) {
+  const hintEl = document.getElementById("aspects-hint");
+  if (state.aspects.length) {
+    hintEl.textContent =
+      "Available aspect types: " +
+      state.aspects.map((a) => `${a.type} = ${JSON.stringify(a.example)}`).join(" | ");
+  }
+
+  if (state.selectedMissingKind && state.profiles.some((p) => p.kind === state.selectedMissingKind)) {
     state.selectedMissingKind = "";
   }
   syncKindSelect();
 
   const tbody = document.getElementById("catalog-body");
-  tbody.innerHTML = profiles
+  tbody.innerHTML = state.profiles
     .map((p) => {
+      const resStr = Object.keys(p.resources || {})
+        .sort()
+        .map((k) => `${k}: ${p.resources[k]}`)
+        .join(", ");
       return `
         <tr>
           <td><strong>${escapeHtml(p.kind)}</strong></td>
-          <td><code>${escapeHtml((p.aspects || []).join(", "))}</code></td>
+          <td><code>${escapeHtml(resStr)}</code></td>
           <td>${p.supports_live_state ? "yes" : "no"}</td>
           <td>${p.serial_execution ? "serial" : "parallel"}</td>
           <td><code>${escapeHtml(JSON.stringify(p.default_queues || {}))}</code></td>
@@ -239,7 +288,7 @@ async function refreshCatalog() {
       document.getElementById("profile-fetch-queue").value = p.fetch_state_queue || "";
       document.getElementById("profile-json").value = JSON.stringify(
         {
-          aspects: p.aspects,
+          resources: p.resources,
           default_queues: p.default_queues,
           fetch_state_queue: p.fetch_state_queue,
           supports_live_state: p.supports_live_state,
@@ -339,11 +388,20 @@ document.getElementById("reload-catalog-btn").addEventListener("click", async ()
   }
 });
 
+document.getElementById("intent-kind").addEventListener("change", updateKindContractHint);
+
 document.getElementById("preset-lamp").addEventListener("click", () => {
   const rand = () => Math.floor(Math.random() * 256);
+  const kind = document.getElementById("intent-kind").value;
+  const p = state.profiles.find((x) => x.kind === kind);
+  let lightName = "main";
+  if (p && p.resources) {
+    const found = Object.keys(p.resources).sort().find((k) => p.resources[k] === "light");
+    if (found) lightName = found;
+  }
   document.getElementById("intent-patch").value = JSON.stringify(
     {
-      light: { r: rand(), g: rand(), b: rand() },
+      [lightName]: { r: rand(), g: rand(), b: rand() },
     },
     null,
     2

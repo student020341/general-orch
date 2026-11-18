@@ -78,6 +78,7 @@
             <input id="intent-queue" type="text" placeholder="default from profile" />
           </label>
         </div>
+        <div id="kind-contract" class="muted"></div>
         <label>
           Patch / Target (JSON)
           <textarea id="intent-patch" rows="6" spellcheck="false">{
@@ -134,7 +135,7 @@
             <thead>
               <tr>
                 <th>Kind</th>
-                <th>Aspects</th>
+                <th>Resources</th>
                 <th>Live State</th>
                 <th>Serial</th>
                 <th>Default Queues</th>
@@ -159,13 +160,16 @@
           <label>
             Profile JSON Body
             <textarea id="profile-json" rows="7" spellcheck="false">{
-  "aspects": ["lights"],
-  "default_queues": { "lights": "lighting-workers" },
+  "resources": {
+    "status_led": "light"
+  },
+  "default_queues": { "light": "lighting-workers" },
   "fetch_state_queue": "",
   "supports_live_state": false,
   "serial_execution": false
 }</textarea>
           </label>
+          <div id="aspects-hint" class="muted"></div>
           <div class="actions">
             <button type="submit" class="btn btn-primary">Save Profile (Upsert)</button>
             <span id="profile-msg" class="muted"></span>

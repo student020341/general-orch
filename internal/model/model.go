@@ -80,16 +80,23 @@ type Plan struct {
 	UpdatedAt time.Time  `json:"updated_at"`
 }
 
-// DeviceProfile describes the capabilities, default worker queues, and hardware
-// constraints for a supported entity kind.
+// DeviceProfile describes the named resource slots, default worker queues, and
+// hardware constraints for a supported entity kind.
 type DeviceProfile struct {
 	Kind              string            `json:"kind"`
-	Aspects           []string          `json:"aspects"`
-	DefaultQueues     map[string]string `json:"default_queues"`
+	Resources         map[string]string `json:"resources"`      // resource_name -> aspect type
+	DefaultQueues     map[string]string `json:"default_queues"` // aspect type or resource_name -> task queue
 	FetchStateQueue   string            `json:"fetch_state_queue"`
 	SupportsLiveState bool              `json:"supports_live_state"`
 	SerialExecution   bool              `json:"serial_execution"`
 	UpdatedAt         time.Time         `json:"updated_at,omitempty"`
+}
+
+// AspectSchema describes an aspect type's contract for clients and UIs.
+type AspectSchema struct {
+	Type        string `json:"type"`
+	Description string `json:"description"`
+	Example     any    `json:"example,omitempty"`
 }
 
 // CloneState returns a deep copy of a State map via JSON round-trip normalization.

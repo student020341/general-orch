@@ -56,13 +56,16 @@ CREATE TABLE IF NOT EXISTS plan_steps (
 
 CREATE TABLE IF NOT EXISTS device_profiles (
 	kind TEXT PRIMARY KEY,
-	aspects JSONB NOT NULL DEFAULT '[]'::jsonb,
+	resources JSONB NOT NULL DEFAULT '{}'::jsonb,
 	default_queues JSONB NOT NULL DEFAULT '{}'::jsonb,
 	fetch_state_queue TEXT NOT NULL DEFAULT '',
 	supports_live_state BOOLEAN NOT NULL DEFAULT false,
 	serial_execution BOOLEAN NOT NULL DEFAULT false,
 	updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+ALTER TABLE device_profiles ADD COLUMN IF NOT EXISTS resources JSONB NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE device_profiles DROP COLUMN IF EXISTS aspects;
 `
 
 // Store implements store.Store backed by PostgreSQL.
@@ -470,7 +473,7 @@ func scanEntity(row pgx.Row) (*model.Entity, error) {
 
 func (s *Store) ListProfiles(ctx context.Context) ([]model.DeviceProfile, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT kind, aspects, default_queues, fetch_state_queue, supports_live_state, serial_execution, updated_at
+		SELECT kind, resources, default_queues, fetch_state_queue, supports_live_state, serial_execution, updated_at
 		FROM device_profiles
 		ORDER BY kind ASC
 	`)
@@ -492,7 +495,7 @@ func (s *Store) ListProfiles(ctx context.Context) ([]model.DeviceProfile, error)
 
 func (s *Store) GetProfile(ctx context.Context, kind string) (*model.DeviceProfile, error) {
 	row := s.pool.QueryRow(ctx, `
-		SELECT kind, aspects, default_queues, fetch_state_queue, supports_live_state, serial_execution, updated_at
+		SELECT kind, resources, default_queues, fetch_state_queue, supports_live_state, serial_execution, updated_at
 		FROM device_profiles
 		WHERE kind = $1
 	`, kind)
@@ -500,13 +503,13 @@ func (s *Store) GetProfile(ctx context.Context, kind string) (*model.DeviceProfi
 }
 
 func (s *Store) UpsertProfile(ctx context.Context, profile model.DeviceProfile) (*model.DeviceProfile, error) {
-	if profile.Aspects == nil {
-		profile.Aspects = []string{}
+	if profile.Resources == nil {
+		profile.Resources = map[string]string{}
 	}
 	if profile.DefaultQueues == nil {
 		profile.DefaultQueues = map[string]string{}
 	}
-	aspectsJSON, err := json.Marshal(profile.Aspects)
+	resourcesJSON, err := json.Marshal(profile.Resources)
 	if err != nil {
 		return nil, err
 	}
@@ -518,16 +521,16 @@ func (s *Store) UpsertProfile(ctx context.Context, profile model.DeviceProfile) 
 	profile.UpdatedAt = now
 
 	_, err = s.pool.Exec(ctx, `
-		INSERT INTO device_profiles (kind, aspects, default_queues, fetch_state_queue, supports_live_state, serial_execution, updated_at)
+		INSERT INTO device_profiles (kind, resources, default_queues, fetch_state_queue, supports_live_state, serial_execution, updated_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7)
 		ON CONFLICT (kind) DO UPDATE SET
-			aspects = EXCLUDED.aspects,
+			resources = EXCLUDED.resources,
 			default_queues = EXCLUDED.default_queues,
 			fetch_state_queue = EXCLUDED.fetch_state_queue,
 			supports_live_state = EXCLUDED.supports_live_state,
 			serial_execution = EXCLUDED.serial_execution,
 			updated_at = EXCLUDED.updated_at
-	`, profile.Kind, aspectsJSON, queuesJSON, profile.FetchStateQueue, profile.SupportsLiveState, profile.SerialExecution, now)
+	`, profile.Kind, resourcesJSON, queuesJSON, profile.FetchStateQueue, profile.SupportsLiveState, profile.SerialExecution, now)
 	if err != nil {
 		return nil, err
 	}
@@ -547,9 +550,9 @@ func (s *Store) DeleteProfile(ctx context.Context, kind string) error {
 
 func scanProfile(row pgx.Row) (*model.DeviceProfile, error) {
 	var p model.DeviceProfile
-	var aspectsRaw, queuesRaw []byte
+	var resourcesRaw, queuesRaw []byte
 	err := row.Scan(
-		&p.Kind, &aspectsRaw, &queuesRaw,
+		&p.Kind, &resourcesRaw, &queuesRaw,
 		&p.FetchStateQueue, &p.SupportsLiveState, &p.SerialExecution, &p.UpdatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -558,10 +561,13 @@ func scanProfile(row pgx.Row) (*model.DeviceProfile, error) {
 	if err != nil {
 		return nil, err
 	}
-	if len(aspectsRaw) > 0 {
-		if err := json.Unmarshal(aspectsRaw, &p.Aspects); err != nil {
+	if len(resourcesRaw) > 0 {
+		if err := json.Unmarshal(resourcesRaw, &p.Resources); err != nil {
 			return nil, err
 		}
+	}
+	if p.Resources == nil {
+		p.Resources = map[string]string{}
 	}
 	if len(queuesRaw) > 0 {
 		if err := json.Unmarshal(queuesRaw, &p.DefaultQueues); err != nil {
