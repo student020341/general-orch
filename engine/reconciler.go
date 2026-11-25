@@ -26,11 +26,11 @@ func (r *Reconciler) Plan(ctx context.Context, req sdk.Request) (sdk.Plan, error
 	if err != nil {
 		return sdk.Plan{}, err
 	}
-	if err := driver.ValidateResource(req.Resource); err != nil {
-		return sdk.Plan{}, fmt.Errorf("invalid resource for %s: %w", driver.Info().ID(), err)
+	if err := validateResource(driver, req.Resource); err != nil {
+		return sdk.Plan{}, err
 	}
 	if err := driver.ValidateTarget(req.Target); err != nil {
-		return sdk.Plan{}, fmt.Errorf("invalid target config for %s: %w", driver.Info().ID(), err)
+		return sdk.Plan{}, sdk.Terminal(fmt.Errorf("invalid target config for %s: %w", driver.Info().ID(), err))
 	}
 
 	current, err := driver.Read(ctx, req.Resource)
@@ -53,8 +53,8 @@ func (r *Reconciler) ApplyPlan(ctx context.Context, resource json.RawMessage, pl
 	if err != nil {
 		return sdk.ApplyResult{}, err
 	}
-	if err := driver.ValidateResource(resource); err != nil {
-		return sdk.ApplyResult{}, fmt.Errorf("invalid resource for %s: %w", driver.Info().ID(), err)
+	if err := validateResource(driver, resource); err != nil {
+		return sdk.ApplyResult{}, err
 	}
 
 	result := sdk.ApplyResult{Driver: driver.Info()}
@@ -82,10 +82,17 @@ func (r *Reconciler) ApplyStep(ctx context.Context, provider, kind string, resou
 	if err != nil {
 		return err
 	}
-	if err := driver.ValidateResource(resource); err != nil {
-		return fmt.Errorf("invalid resource for %s: %w", driver.Info().ID(), err)
+	if err := validateResource(driver, resource); err != nil {
+		return err
 	}
 	return driver.ApplyStep(ctx, resource, step)
+}
+
+func validateResource(driver sdk.Driver, resource json.RawMessage) error {
+	if err := driver.ValidateResource(resource); err != nil {
+		return sdk.Terminal(fmt.Errorf("invalid resource for %s: %w", driver.Info().ID(), err))
+	}
+	return nil
 }
 
 // Reconcile plans and immediately applies any required changes for the request.

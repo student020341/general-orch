@@ -120,6 +120,36 @@ func TestValidationRejectsInvalidFields(t *testing.T) {
 			if err == nil {
 				t.Fatal("expected validation error, got nil")
 			}
+			if !sdk.IsTerminal(err) {
+				t.Fatalf("expected validation error to be terminal, got %v", err)
+			}
 		})
+	}
+}
+
+func TestMissingDeviceIsRetryableWhileUnsupportedActionIsTerminal(t *testing.T) {
+	rec, _ := setupReconciler(t, lightspinner.State{})
+
+	// Missing device on Read/ApplyStep stays retryable (not terminal).
+	_, err := rec.Plan(context.Background(), sdk.Request{
+		Provider: "diy",
+		Kind:     "light-spinner",
+		Resource: json.RawMessage(`{"device_id":"unplugged"}`),
+		Target:   json.RawMessage(`{"platform":{"angle":45}}`),
+	})
+	if err == nil {
+		t.Fatal("expected missing device error")
+	}
+	if sdk.IsTerminal(err) {
+		t.Fatalf("expected missing device error to remain retryable, got terminal: %v", err)
+	}
+
+	// Unsupported step action is terminal.
+	err = rec.ApplyStep(context.Background(), "diy", "light-spinner", json.RawMessage(`{"device_id":"bench-1"}`), sdk.Step{
+		ID:     "bad",
+		Action: "self_destruct",
+	})
+	if err == nil || !sdk.IsTerminal(err) {
+		t.Fatalf("expected terminal error for unsupported action, got %v", err)
 	}
 }

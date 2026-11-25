@@ -110,7 +110,7 @@ func (d *Driver) ApplyStep(_ context.Context, rawResource json.RawMessage, step 
 	case ActionSetLight:
 		var p SetLightParams
 		if err := json.Unmarshal(step.Params, &p); err != nil {
-			return fmt.Errorf("decode %s params: %w", step.Action, err)
+			return sdk.Terminal(fmt.Errorf("decode %s params: %w", step.Action, err))
 		}
 		switch p.Light {
 		case "light1":
@@ -118,16 +118,16 @@ func (d *Driver) ApplyStep(_ context.Context, rawResource json.RawMessage, step 
 		case "light2":
 			state.Light2 = p.State
 		default:
-			return fmt.Errorf("unknown light %q", p.Light)
+			return sdk.Terminal(fmt.Errorf("unknown light %q", p.Light))
 		}
 	case ActionRotatePlatform:
 		var p RotatePlatformParams
 		if err := json.Unmarshal(step.Params, &p); err != nil {
-			return fmt.Errorf("decode %s params: %w", step.Action, err)
+			return sdk.Terminal(fmt.Errorf("decode %s params: %w", step.Action, err))
 		}
 		state.Platform.Angle = p.Angle
 	default:
-		return fmt.Errorf("unsupported action %q", step.Action)
+		return sdk.Terminal(fmt.Errorf("unsupported action %q", step.Action))
 	}
 
 	d.store.devices[resource.DeviceID] = state

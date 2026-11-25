@@ -239,4 +239,79 @@ func TestApplyPlanStopsAfterFailedGroup(t *testing.T) {
 	if len(res.Groups) != 1 || len(res.Groups[0].Steps) != 1 || res.Groups[0].Steps[0].Error == "" {
 		t.Fatalf("unexpected partial ApplyResult: %+v", res)
 	}
+	if sdk.IsTerminal(err) {
+		t.Fatal("expected plain step error not to be marked terminal")
+	}
+}
+
+func TestTerminalErrorsPropagate(t *testing.T) {
+	reg := engine.NewRegistry()
+	_ = reg.RegisterDriver(&fakeDriver{
+		info: sdk.DriverInfo{Provider: "diy", Kind: "spinner"},
+		validateResource: func(r json.RawMessage) error {
+			if string(r) == `{}` {
+				return errors.New("missing id")
+			}
+			return nil
+		},
+		validateTarget: func(tgt json.RawMessage) error {
+			if string(tgt) == `{"bad":true}` {
+				return errors.New("bad config")
+			}
+			return nil
+		},
+		applyFn: func(_ context.Context, _ json.RawMessage, s sdk.Step) error {
+			if s.Action == "bad_action" {
+				return sdk.Terminal(errors.New("unsupported"))
+			}
+			return nil
+		},
+	})
+
+	rec := engine.NewReconciler(reg)
+
+	// Invalid resource and invalid target in Plan should be marked terminal.
+	_, err := rec.Plan(context.Background(), sdk.Request{
+		Provider: "diy",
+		Kind:     "spinner",
+		Resource: json.RawMessage(`{}`),
+		Target:   json.RawMessage(`{}`),
+	})
+	if err == nil || !sdk.IsTerminal(err) {
+		t.Fatalf("expected terminal invalid resource error, got %v", err)
+	}
+
+	_, err = rec.Plan(context.Background(), sdk.Request{
+		Provider: "diy",
+		Kind:     "spinner",
+		Resource: json.RawMessage(`{"id":"1"}`),
+		Target:   json.RawMessage(`{"bad":true}`),
+	})
+	if err == nil || !sdk.IsTerminal(err) {
+		t.Fatalf("expected terminal invalid target error, got %v", err)
+	}
+
+	// Terminal error inside a parallel group should remain terminal after errors.Join.
+	_, err = rec.ApplyPlan(context.Background(), json.RawMessage(`{"id":"1"}`), sdk.Plan{
+		Driver: sdk.DriverInfo{Provider: "diy", Kind: "spinner"},
+		Groups: []sdk.StepGroup{
+			{
+				Name:     "parallel",
+				Parallel: true,
+				Steps: []sdk.Step{
+					{ID: "s1", Action: "ok"},
+					{ID: "s2", Action: "bad_action"},
+				},
+			},
+		},
+	})
+	if err == nil || !sdk.IsTerminal(err) {
+		t.Fatalf("expected terminal error from parallel group, got %v", err)
+	}
+
+	// Direct ApplyStep validation error should be terminal.
+	err = rec.ApplyStep(context.Background(), "diy", "spinner", json.RawMessage(`{}`), sdk.Step{ID: "s1", Action: "ok"})
+	if err == nil || !sdk.IsTerminal(err) {
+		t.Fatalf("expected terminal error from ApplyStep invalid resource, got %v", err)
+	}
 }
